@@ -14,7 +14,7 @@
 #define VERIFIABLE 0
 
 #define CCATCH(expr) cudaStatus = expr; if (cudaStatus != cudaSuccess) { fprintf(stderr, "CUDA Error: %s\n", cudaGetErrorString(cudaStatus)); throw; }
-#define CLOG(expr) if (blockIdx.x == 0 && threadIdx.x == 429) { expr; }
+#define CLOG(expr) if (blockIdx.x == 0 && threadIdx.x == 500) { expr; }
 #define TILEHEIGHT 512
 
 __device__ int Min(int a, int b)
@@ -63,14 +63,25 @@ __global__ void Kernel(int start, const uint64_t* primes, uint64_t* remainders)
         if (n > ty * TILEHEIGHT)
         {
             int iThresh = Min((n - ty * TILEHEIGHT) / 2, TILEHEIGHT / 2);
-            int i;
-            for (i = 0; i < iThresh; i++)
+
+            if (id & 1 == 0) // Loop backwards for every other thread to slightly improve bank conflicts
             {
-                prod *= FastMod(shPrimes[i], modDiv);
-                prod = FastMod(prod, modDiv);
+                for (int i = 0; i < iThresh; i++)
+                {
+                    prod *= FastMod(shPrimes[i], modDiv);
+                    prod = FastMod(prod, modDiv);
+                }
+            }
+            else
+            {
+                for (int i = iThresh - 1; i >= 0; i--)
+                {
+                    prod *= FastMod(shPrimes[i], modDiv);
+                    prod = FastMod(prod, modDiv);
+                }
             }
 
-            if (i < TILEHEIGHT / 2 || n == ty * TILEHEIGHT + TILEHEIGHT) // Tile was only partially completed, do final multiplication and check value
+            if (iThresh < TILEHEIGHT / 2 || n == ty * TILEHEIGHT + TILEHEIGHT) // Tile was only partially completed, do final multiplication and check value
             {
                 if (n & 1 == 1)
                     prod *= primes[n - 1];
@@ -114,6 +125,10 @@ int main()
     std::vector<uint64_t> primes;
 
     primesieve::generate_n_primes(size, &primes);
+
+    int devNum = 0;
+    cudaGetDeviceCount(&devNum);
+    printf("Devices: %d\n", devNum);
 
     uint64_t* devPrimes = nullptr;
 
