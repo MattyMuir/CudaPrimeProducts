@@ -25,6 +25,7 @@ __device__ int Min(int a, int b)
 __device__ uint64_t FastMod(uint64_t x, const Divider& base)
 {
     return x - base.d * Divide(x, base);
+    // x - d * (((x - q)/2 + q) >> reducedMore)
 }
 
 __global__ void Kernel(int start, const uint64_t* primes, uint64_t* remainders)
@@ -46,7 +47,7 @@ __global__ void Kernel(int start, const uint64_t* primes, uint64_t* remainders)
 
     uint64_t modPrime = primes[n];
     Divider modDiv = GenDiv(modPrime);
-
+    printf("%d\n", (int)modDiv.reducedMore);
     for (int ty = 0; ty < yTileNum; ty++)
     {
         // Perform first layer of multiplication and store results in shPrimes

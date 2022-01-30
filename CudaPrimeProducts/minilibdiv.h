@@ -4,7 +4,7 @@
 struct Divider
 {
     uint64_t d, magic;
-    uint8_t more;
+    uint8_t reducedMore;
 };
 
 __device__ uint64_t Div128(uint64_t numhi, uint64_t den, uint64_t* r)
@@ -12,7 +12,6 @@ __device__ uint64_t Div128(uint64_t numhi, uint64_t den, uint64_t* r)
     constexpr uint64_t b = ((uint64_t)1 << 32);
 
     int shift = __clzll(den);
-    //int shift = 63 - Log2(den);
     den <<= shift;
     numhi <<= shift;
 
@@ -44,23 +43,20 @@ __device__ Divider GenDiv(uint64_t d)
     Divider res;
     res.d = d;
     uint32_t dLog = 63 - __clzll(d);
-    //uint32_t dLog = Log2(d);
 
     uint64_t rem;
     uint64_t m = 2 * Div128((uint64_t)1 << dLog, d, &rem);
 
     const uint64_t twice_rem = rem + rem;
     if (twice_rem >= d || twice_rem < rem) { m += 1; };
-    uint8_t more = (uint8_t)(dLog | 0x40);
     res.magic = 1 + m;
-    res.more = more;
+    res.reducedMore = (uint8_t)(dLog | 0x40) & 0x3F;
 
     return res;
 }
 
 __device__ uint64_t Divide(uint64_t x, const Divider& d)
 {
-    uint8_t more = d.more;
     uint64_t q = __umul64hi(d.magic, x);
-    return  (((x - q) >> 1) + q) >> (more & 0x3F);
+    return (((x - q) >> 1) + q) >> d.reducedMore;
 }
