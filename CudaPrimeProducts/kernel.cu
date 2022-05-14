@@ -14,7 +14,6 @@
 #define VERIFIABLE 0
 
 #define CCATCH(expr) cudaStatus = expr; if (cudaStatus != cudaSuccess) { fprintf(stderr, "CUDA Error: %s\n", cudaGetErrorString(cudaStatus)); throw; }
-#define CLOG(expr) if (blockIdx.x == 0 && threadIdx.x == 500) { expr; }
 #define TILEHEIGHT 512
 
 __device__ int Min(int a, int b)
@@ -47,7 +46,6 @@ __global__ void Kernel(int start, const uint64_t* primes, uint64_t* remainders)
 
     uint64_t modPrime = primes[n];
     Divider modDiv = GenDiv(modPrime);
-    printf("%d\n", (int)modDiv.reducedMore);
     for (int ty = 0; ty < yTileNum; ty++)
     {
         // Perform first layer of multiplication and store results in shPrimes
@@ -65,29 +63,18 @@ __global__ void Kernel(int start, const uint64_t* primes, uint64_t* remainders)
         {
             int iThresh = Min((n - ty * TILEHEIGHT) / 2, TILEHEIGHT / 2);
 
-            if (id & 1 == 0) // Loop backwards for every other thread to slightly improve bank conflicts
+            for (int i = 0; i < iThresh; i++)
             {
-                for (int i = 0; i < iThresh; i++)
-                {
-                    prod *= FastMod(shPrimes[i], modDiv);
-                    prod = FastMod(prod, modDiv);
-                }
-            }
-            else
-            {
-                for (int i = iThresh - 1; i >= 0; i--)
-                {
-                    prod *= FastMod(shPrimes[i], modDiv);
-                    prod = FastMod(prod, modDiv);
-                }
+                prod *= FastMod(shPrimes[i], modDiv);
+                prod = FastMod(prod, modDiv);
             }
 
             if (iThresh < TILEHEIGHT / 2 || n == ty * TILEHEIGHT + TILEHEIGHT) // Tile was only partially completed, do final multiplication and check value
             {
-                if (n & 1 == 1)
+                if (n & 1)
                     prod *= primes[n - 1];
 
-                prod %= modPrime;
+                prod = FastMod(modPrime, modDiv);
                 if (prod == modPrime - 1)
                     printf("%d\n", n);
 
@@ -133,8 +120,9 @@ int main()
 
     uint64_t* devPrimes = nullptr;
 
-    cudaMalloc(&devPrimes, size * sizeof(*devPrimes));
-    cudaMemcpy(devPrimes, &(primes[0]), size * sizeof(primes[0]), cudaMemcpyHostToDevice);
+    size_t bufSize = size * sizeof(uint64_t);
+    cudaMalloc(&devPrimes, bufSize);
+    cudaMemcpy(devPrimes, primes.data(), bufSize, cudaMemcpyHostToDevice);
 
     // ===== Remainders =====
     uint64_t* remainders = nullptr;
@@ -147,13 +135,14 @@ int main()
     int th = 1024;
     int b = (end - start) / th;
 
-    std::cout << "Running kernel...\n"; Timer t;
+    std::cout << "Running kernel...\n";
+    TIMER(kernel);
 
-    Kernel << < b, th >> > (start, devPrimes, remainders);
+    Kernel<<< b, th >>>(start, devPrimes, remainders);
     CCATCH(cudaGetLastError());
     CCATCH(cudaDeviceSynchronize());
 
-    t.Stop(); std::cout << "Finished, kernel took: " << t.duration * 0.001 << "ms\n";
+    STOP_LOG(kernel);
 
 #if VERIFIABLE == 1
     SaveRemainders("C:\\Users\\matty\\Desktop\\rems.txt", remainders, th * b);

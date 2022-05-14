@@ -1,6 +1,16 @@
 #pragma once
 #include <chrono>
 
+#define TIMING 1
+
+#if TIMING
+#define TIMER(x) Timer x
+#define STOP_LOG(x) x.Stop(); std::cout << #x << " took: " << x.duration * 0.001 << "ms\n"
+#else
+#define TIMER(x)
+#define STOP_LOG(x)
+#endif
+
 class Timer
 {
 public:
@@ -21,5 +31,5 @@ public:
         duration = end - start;
     }
 private:
-    std::chrono::time_point < std::chrono::high_resolution_clock > m_StartTimePoint;
+    std::chrono::time_point<std::chrono::high_resolution_clock>m_StartTimePoint;
 };
