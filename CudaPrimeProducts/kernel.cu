@@ -10,6 +10,7 @@
 #include <primesieve.hpp>
 #include "Timer.h"
 #include "minilibdiv.h"
+#include "util.h"
 
 #define VERIFIABLE 0
 
@@ -24,7 +25,6 @@ __device__ int Min(int a, int b)
 __device__ uint64_t FastMod(uint64_t x, const Divider& base)
 {
     return x - base.d * Divide(x, base);
-    // x - d * (((x - q)/2 + q) >> reducedMore)
 }
 
 __global__ void Kernel(int start, const uint64_t* primes, uint64_t* remainders)
@@ -32,20 +32,19 @@ __global__ void Kernel(int start, const uint64_t* primes, uint64_t* remainders)
     int id = threadIdx.x;
     int bNumThreads = blockDim.x;
 
-    start += blockIdx.x * bNumThreads;
-    int end = start + bNumThreads - 1;
+    int batchStart = start + blockIdx.x * bNumThreads;
+    int end = batchStart + bNumThreads - 1;
 
-    __shared__ uint64_t shPrimes[TILEHEIGHT / 2];
+    // Value of n for current thread
+    int n = batchStart + id;
 
     // Number of tiles vertically = ceil(end / TILEHEIGHT)
     int yTileNum = (end + TILEHEIGHT - 1) / TILEHEIGHT;
 
-    // Value of n for current thread
-    int n = start + id;
-    uint64_t prod = 1;
+    __shared__ uint64_t shPrimes[TILEHEIGHT / 2];
 
-    uint64_t modPrime = primes[n];
-    Divider modDiv = GenDiv(modPrime);
+    uint64_t prod = 1;
+    Divider modDiv = GenDiv(primes[n]);
     for (int ty = 0; ty < yTileNum; ty++)
     {
         // Perform first layer of multiplication and store results in shPrimes
@@ -61,26 +60,37 @@ __global__ void Kernel(int start, const uint64_t* primes, uint64_t* remainders)
         // Check if thread is active for current tile
         if (n > ty * TILEHEIGHT)
         {
-            int iThresh = Min((n - ty * TILEHEIGHT) / 2, TILEHEIGHT / 2);
-
-            for (int i = 0; i < iThresh; i++)
+            // Tile will only be partially completed
+            if (n - ty * TILEHEIGHT <= TILEHEIGHT)
             {
-                prod *= FastMod(shPrimes[i], modDiv);
-                prod = FastMod(prod, modDiv);
-            }
+                int iThresh = Min((n - ty * TILEHEIGHT) / 2, TILEHEIGHT / 2);
 
-            if (iThresh < TILEHEIGHT / 2 || n == ty * TILEHEIGHT + TILEHEIGHT) // Tile was only partially completed, do final multiplication and check value
-            {
+                for (int i = 0; i < iThresh; i++)
+                {
+                    prod *= FastMod(shPrimes[i], modDiv);
+                    prod = FastMod(prod, modDiv);
+                }
+
                 if (n & 1)
                     prod *= primes[n - 1];
+                prod = FastMod(prod, modDiv);
 
-                prod = FastMod(modPrime, modDiv);
-                if (prod == modPrime - 1)
+                // Now that the partial tile is complete, the whole prod is
+                // Check final remainder
+                if (prod == modDiv.d - 1)
                     printf("%d\n", n);
 
-#if VERIFIABLE == 1
-                remainders[n] = (prod + 1) % modPrime;
+#if VERIFIABLE
+                remainders[n - start] = prod;
 #endif
+            }
+            else // Tile will be fully completed
+            {
+                for (int i = 0; i < TILEHEIGHT / 2; i++)
+                {
+                    prod *= FastMod(shPrimes[i], modDiv);
+                    prod = FastMod(prod, modDiv);
+                }
             }
         }
         // Sync threads to ensure all are finished before changing shared memory
@@ -88,31 +98,20 @@ __global__ void Kernel(int start, const uint64_t* primes, uint64_t* remainders)
     }
 }
 
-void SaveRemainders(std::string path, uint64_t* remainders, int num)
-{
-    std::cout << "Saving...\n";
-    std::ofstream file;
-    file.open(path);
-
-    for (int i = 0; i < num; i++)
-        file << remainders[i] << "\n";
-
-    file.close();
-    std::cout << "Saved.\n";
-}
-
 int main()
 {
     cudaError_t cudaStatus;
 
-    int start = 1;
-    int end = 1e6;
+    int start = IntInput("Start: ");
+    int end = IntInput("End: ");
     int size = end + 1;
 
     // ===== Generate Primes =====
     std::vector<uint64_t> primes;
 
+    TIMER(genprimes);
     primesieve::generate_n_primes(size, &primes);
+    STOP_LOG(genprimes);
 
     int devNum = 0;
     cudaGetDeviceCount(&devNum);
@@ -121,14 +120,14 @@ int main()
     uint64_t* devPrimes = nullptr;
 
     size_t bufSize = size * sizeof(uint64_t);
-    cudaMalloc(&devPrimes, bufSize);
-    cudaMemcpy(devPrimes, primes.data(), bufSize, cudaMemcpyHostToDevice);
+    CCATCH(cudaMalloc(&devPrimes, bufSize));
+    CCATCH(cudaMemcpy(devPrimes, primes.data(), bufSize, cudaMemcpyHostToDevice));
 
     // ===== Remainders =====
     uint64_t* remainders = nullptr;
-#if VERIFIABLE == 1
-    cudaMallocManaged(&remainders, size * sizeof(*remainders));
-    cudaMemset(remainders, 0, size * sizeof(*remainders));
+#if VERIFIABLE
+    CCATCH(cudaMallocManaged(&remainders, size * sizeof(*remainders)));
+    CCATCH(cudaMemset(remainders, 0, size * sizeof(*remainders)));
 #endif
 
     // ===== Run Kernel =====
@@ -136,6 +135,7 @@ int main()
     int b = (end - start) / th;
 
     std::cout << "Running kernel...\n";
+    freopen("log.log", "w", stdout);
     TIMER(kernel);
 
     Kernel<<< b, th >>>(start, devPrimes, remainders);
@@ -144,8 +144,8 @@ int main()
 
     STOP_LOG(kernel);
 
-#if VERIFIABLE == 1
-    SaveRemainders("C:\\Users\\matty\\Desktop\\rems.txt", remainders, th * b);
+#if VERIFIABLE
+    SaveRemainders(start, end, remainders, th * b);
 #endif
 
     // ===== Free Memory =====
