@@ -9,7 +9,7 @@ struct Divider
 
 __device__ uint64_t Div128(uint64_t numhi, uint64_t den, uint64_t* r)
 {
-    constexpr uint64_t b = ((uint64_t)1 << 32);
+    constexpr uint64_t b = (uint64_t)1 << 32;
 
     int shift = __clzll(den);
     den <<= shift;

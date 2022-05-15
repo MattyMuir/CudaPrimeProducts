@@ -104,6 +104,13 @@ int main()
 
     int start = IntInput("Start: ");
     int end = IntInput("End: ");
+
+    // ===== Prepare Kernel Parameters =====
+    int th = 1024;
+    int b = (end - start + th - 1) / th;
+
+    // Round 'end' to nearest multiple of 'th'
+    end = start + th * b;
     int size = end + 1;
 
     // ===== Generate Primes =====
@@ -115,7 +122,7 @@ int main()
 
     int devNum = 0;
     cudaGetDeviceCount(&devNum);
-    printf("Devices: %d\n", devNum);
+    std::cout << "Devices: " << devNum << '\n';
 
     uint64_t* devPrimes = nullptr;
 
@@ -130,19 +137,19 @@ int main()
     CCATCH(cudaMemset(remainders, 0, size * sizeof(*remainders)));
 #endif
 
-    // ===== Run Kernel =====
-    int th = 1024;
-    int b = (end - start) / th;
-
+    // ===== Running Kernel =====
     std::cout << "Running kernel...\n";
     freopen("log.log", "w", stdout);
+    std::cout << "=============\n" << std::flush;
     TIMER(kernel);
 
     Kernel<<< b, th >>>(start, devPrimes, remainders);
     CCATCH(cudaGetLastError());
     CCATCH(cudaDeviceSynchronize());
 
+    std::cout << "=============\n";
     STOP_LOG(kernel);
+    std::cout << "Checked: (" << start << ", " << end << ")\n";
 
 #if VERIFIABLE
     SaveRemainders(start, end, remainders, th * b);
@@ -150,7 +157,7 @@ int main()
 
     // ===== Free Memory =====
     cudaFree(devPrimes);
-#if VERIFIABLE == 1
+#if VERIFIABLE
     cudaFree(remainders);
 #endif
 }
