@@ -8,6 +8,7 @@
 #include <fstream>
 
 #include <primesieve.hpp>
+#define LEGACY_CPP
 #include "Timer.h"
 #include "minilibdiv.h"
 #include "util.h"
@@ -143,7 +144,7 @@ int main()
     std::cout << "=============\n" << std::flush;
     TIMER(kernel);
 
-    Kernel<<< b, th >>>(start, devPrimes, remainders);
+    Kernel << < b, th >> > (start, devPrimes, remainders);
     CCATCH(cudaGetLastError());
     CCATCH(cudaDeviceSynchronize());
 
